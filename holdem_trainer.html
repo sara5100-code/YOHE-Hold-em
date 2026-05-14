@@ -62,7 +62,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',Arial,sans-se
 .badge-sb{background:#2563eb;color:#fff;}.badge-bb{background:#059669;color:#fff;}
 .badge-utg{background:#dc2626;color:#fff;}.badge-utg1{background:#ea580c;color:#fff;}
 .badge-mp{background:#b45309;color:#fff;}.badge-hj{background:#0e7490;color:#fff;}
-.badge-co{background:#0369a1;color:#fff;}
+.badge-co{background:#0369a1;color:#fff;}.badge-lj{background:#0f766e;color:#fff;}
 .dealer-marker{position:absolute;top:-7px;right:-7px;width:15px;height:15px;background:#fff;border-radius:50%;font-size:7px;font-weight:900;color:#000;display:flex;align-items:center;justify-content:center;}
 .hole-cards{display:flex;gap:2px;}
 
@@ -480,17 +480,27 @@ function handDesc(c1,c2){
 }
 
 const POS_THRESH={
-  easy:{UTG:5,MP:4,CO:3,BTN:2,SB:3,BB:0},
-  medium:{UTG:9,MP:8,CO:6,BTN:5,SB:6,BB:0},
-  hard:{UTG:11,MP:10,CO:8,BTN:6,SB:7,BB:0}
+  easy:{UTG:5,'UTG+1':5,MP:4,LJ:4,HJ:3,CO:3,BTN:2,SB:3,BB:0},
+  medium:{UTG:9,'UTG+1':9,MP:8,LJ:7,HJ:7,CO:6,BTN:5,SB:6,BB:0},
+  hard:{UTG:11,'UTG+1':11,MP:10,LJ:9,HJ:8,CO:8,BTN:6,SB:7,BB:0}
 };
 function posLabel(si,di,n){
   const rel=((si-di)%n+n)%n;
   if(n===2)return rel===0?'BTN':'BB';
   if(rel===0)return'BTN';if(rel===1)return'SB';if(rel===2)return'BB';
-  const f=(rel-3+n)%n,tot=n-3;
-  if(tot<=0)return'UTG';const fr=f/tot;
-  if(fr<0.35)return'UTG';if(fr<0.65)return'MP';return'CO';
+  const pos=rel-3;
+  // 人数ごとのポジション名テーブル（BTN/SB/BB除く）
+  const tbl={
+    1:['UTG'],
+    2:['UTG','CO'],
+    3:['UTG','MP','CO'],
+    4:['UTG','UTG+1','HJ','CO'],
+    5:['UTG','UTG+1','MP','HJ','CO'],
+    6:['UTG','UTG+1','MP','LJ','HJ','CO']
+  };
+  const tot=n-3;
+  const arr=tbl[tot]||tbl[6];
+  return arr[Math.min(pos,arr.length-1)]||'MP';
 }
 
 // ---- AI DECISION ----
@@ -721,6 +731,8 @@ class GameEngine{
     else if(this.street==='turn'||this.street==='river')this.community.push(this.deck.deal());
     else if(this.street==='showdown'){while(this.community.length<5)this.community.push(this.deck.deal());this._end();return;}
     this._setOrder();
+    // オールインランアウト：アクター不在なら自動で次ストリートへ
+    if(this.actorsRemaining.length===0&&this.street!=='showdown')this._next();
   }
   _end(){
     const nf=this.nonFolded();
@@ -820,7 +832,7 @@ function analyzeHand(hr){
       const pos=d.position||'MP';
       // ポジション別オープンレンジ基準（チェンスコア）
       // AI(medium)と同じ閾値に統一してズレをなくす
-      const openThresh={UTG:9,MP:8,CO:6,BTN:5,SB:6,BB:99}[pos]||8;
+      const openThresh={UTG:9,'UTG+1':9,MP:8,LJ:7,HJ:7,CO:6,BTN:5,SB:6,BB:99}[pos]||8;
       // BBからのレイズ（3BET/スクイーズ）は別基準：HU=3、マルチウェイ=5
       const activeCnt=hr.players.filter(function(p){return p.active;}).length;
       const bbRaiseThresh=activeCnt<=2?3:5;
@@ -1136,7 +1148,7 @@ function renderTable(){
     if(isWin)cls+=' winner-seat';
     // 全ポジションにバッジを付ける
     const posStr=posLabel(pi,game.dealerIndex,game.players.length);
-    const posBadgeMap={BTN:'badge-d',SB:'badge-sb',BB:'badge-bb',UTG:'badge-utg','UTG+1':'badge-utg1',MP:'badge-mp',HJ:'badge-hj',CO:'badge-co'};
+    const posBadgeMap={BTN:'badge-d',SB:'badge-sb',BB:'badge-bb',UTG:'badge-utg','UTG+1':'badge-utg1',MP:'badge-mp',LJ:'badge-lj',HJ:'badge-hj',CO:'badge-co'};
     const posBadgeCls=posBadgeMap[posStr]||'badge-co';
     let badge='';
     if(isDlr)badge+='<span class="seat-pos-badge badge-d">BTN</span> ';
@@ -1319,12 +1331,13 @@ function populateTips(){
 // ---- GAME LOOP ----
 let aiTimeout=null;
 function runAI(){
-  if(!game||game.street==='showdown'||game.waitingForHuman)return;
+  if(!game||game.waitingForHuman)return;
+  if(game.street==='showdown'){if(!game._handEnded){game._handEnded=true;finishHand();}return;}
   if(game.isHumanTurn()){game.waitingForHuman=true;renderTable();return;}
   const idx=game.actionIdx;
   if(idx<0)return;
   const pl=game.players[idx];
-  if(!pl||pl.folded||pl.allIn||!pl.active)return;
+  if(!pl||pl.folded||pl.allIn||!pl.active){runAI();return;}
   aiTimeout=setTimeout(function(){
     const dec=aiDecide(pl,game,aiLevel);
     game.processAction(idx,dec.action,dec.amount||0);
@@ -1354,7 +1367,7 @@ function finishHand(){
 }
 function startNewHand(){
   if(aiTimeout)clearTimeout(aiTimeout);
-  game.waitingForHuman=false;game._lastWinners=[];
+  game.waitingForHuman=false;game._lastWinners=[];game._handEnded=false;
   game.players.forEach(p=>p._rebought=false);
   game.startHand();
   // リバイ通知
